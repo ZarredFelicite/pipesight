@@ -267,7 +267,7 @@ def process(files):
         # Apply size filtering and draw processed bounding boxes and labels
         for result, group_size in zip(results, groups_size):
             result = result + (convert_bbox_wh(result[2]),)
-            if abs(1 - result[2][2]/result[2][3]) < 0.05 or result[1] < 0.3:
+            if abs(1 - result[2][2]/result[2][3]) > 0.05 or result[1] < 0.3:
                 closest_score = float('inf')
                 closest_group = None
                 current_area = result[2][2] * result[2][3]
@@ -340,7 +340,7 @@ def process(files):
   print(email)
   # Create a new dictionary with only part numbers and counts
   part_counts = {part: data[part]['count'] for part in data.keys()}
-  
+
   # Write the part counts to a JSON file in the output directory
   output_file_path = os.path.join("output", "results.json")
   with open(output_file_path, 'w') as json_file:
