@@ -18,6 +18,7 @@ import onnxruntime
 import bisect
 from pprint import pprint
 import requests
+import json
 
 def draw_label(draw, box, text, color):
   size = font.getlength(text)
@@ -255,62 +256,167 @@ def process(files):
     sizes = [float(part[1]) for part in parts]
     data = { part : { 'count': int(offset), 'box': [1000,1000,0,0], 'size': float(size) } for part, size, offset in parts }
     data['undefined'] = {'count': 0, 'box': [1000,1000,0,0], 'size': 0}
-    for result, group_size in zip(results, groups_size):
-      result = result + (convert_bbox_wh(result[2]),)
-      #part = list(data.keys())[order[group]]
-      print(abs(1 - result[2][2]/result[2][3]))
-      if abs(1 - result[2][2]/result[2][3]) < 0.2:
-        idx = bisect.bisect_left(sizes, size_groups[group_size])
-      else:
-        closest_dist = 10000
-        closest_group = None
-        for close_result, close_group_size in zip(results, groups_size):
-          dist = (close_result[2][0]-result[2][0])**2 + (close_result[2][1]-result[2][1])**2
-          #print(dist)
-          if close_result[1] > 0.7 and dist!=0 and dist < closest_dist:
-            closest_dist = dist
-            closest_group = close_group_size
-        idx = bisect.bisect_left(sizes, size_groups[closest_group])
-      if idx < len(parts):
-        data[parts[idx][0]]['count'] += 1
-        if result[3][0] < data[parts[idx][0]]['box'][0]:
-          data[parts[idx][0]]['box'][0] = int(result[3][0])
-        if result[3][1] < data[parts[idx][0]]['box'][1]:
-          data[parts[idx][0]]['box'][1] = int(result[3][1])
-        if result[3][2] > data[parts[idx][0]]['box'][2]:
-          data[parts[idx][0]]['box'][2] = int(result[3][2])
-        if result[3][3] > data[parts[idx][0]]['box'][3]:
-          data[parts[idx][0]]['box'][3] = int(result[3][3])
-        xywh = result[2]
-        coord = convert_bbox_wh(xywh)
-        #if center_contains(xy, results[part]["box"]):
-        if args.verbose:
-          draw_label(draw, coord, str(round(result[1], 2)), idx)
-        else:
-          draw.rectangle(coord, outline=colors[idx], width=3)
-        #draw_label(draw, coord, str(int(result[2][2])*int(result[2][3])), group)
-        #data[part]["count"] += 1
-        #draw.rectangle(results[part]["box"], outline=(250,0,0), width=6)
-    for part in data.keys():
-      if data[part]['box'][0] != 1000:
-        draw_label(draw, [data[part]['box'][0]-10, data[part]['box'][1]-10, data[part]['box'][2]+10, data[part]['box'][3]+10], part, -1)
+
+    if args.save_raw:
+        # Draw all bounding boxes after NMS but before size filtering
+        for result in results:
+            xywh = result[2]
+            coord = convert_bbox_wh(xywh)
+            draw.rectangle(coord, outline=(0, 255, 0), width=1) # Draw in green for raw
+    else:
+        # Apply size filtering and draw processed bounding boxes and labels
+        for result, group_size in zip(results, groups_size):
+            result = result + (convert_bbox_wh(result[2]),)
+            if abs(1 - result[2][2]/result[2][3]) < 0.05:
+                idx = bisect.bisect_left(sizes, size_groups[group_size])
+            else:
+                closest_score = float('inf')
+                closest_group = None
+                current_area = result[2][2] * result[2][3]
+                for close_result, close_group_size in zip(results, groups_size):
+                    if close_result[1] > 0.5 and (close_result[2][0]-result[2][0])**2 + (close_result[2][1]-result[2][1])**2 != 0:
+                        center_dist = np.sqrt((close_result[2][0]-result[2][0])**2 + (close_result[2][1]-result[2][1])**2)
+                        close_area = close_result[2][2] * close_result[2][3]
+                        size_diff = abs(current_area - close_area)
+                        # Normalize and combine (simple approach: sum of normalized values)
+                        # Need to consider how to normalize appropriately based on expected ranges
+                        # Weight size similarity based on aspect ratio (more weight for square boxes)
+                        aspect_ratio_weight = 1 - abs(1 - result[2][2]/result[2][3])
+                        combined_score = center_dist + (size_diff * aspect_ratio_weight)*0.5
+                        if combined_score < closest_score:
+                            closest_score = combined_score
+                            closest_group = close_group_size
+
+                if closest_group is not None:
+                    idx = bisect.bisect_left(sizes, size_groups[closest_group])
+                else:
+                    # If no nearby confident pipe is found, classify as undefined or use another fallback
+                    # For now, let's classify as undefined
+                    idx = len(parts) # This will make it 'undefined' based on the data dictionary structure
+
+            if idx < len(parts):
+                data[parts[idx][0]]['count'] += 1
+                if result[3][0] < data[parts[idx][0]]['box'][0]:
+                    data[parts[idx][0]]['box'][0] = int(result[3][0])
+                if result[3][1] < data[parts[idx][0]]['box'][1]:
+                    data[parts[idx][0]]['box'][1] = int(result[3][1])
+                if result[3][2] > data[parts[idx][0]]['box'][2]:
+                    data[parts[idx][0]]['box'][2] = int(result[3][2])
+                if result[3][3] > data[parts[idx][0]]['box'][3]:
+                    data[parts[idx][0]]['box'][3] = int(result[3][3])
+                xywh = result[2]
+                coord = convert_bbox_wh(xywh)
+                #if center_contains(xy, results[part]["box"]):
+                if args.verbose:
+                    draw_label(draw, coord, str(round(result[1], 2)), idx)
+                else:
+                    draw.rectangle(coord, outline=colors[idx], width=3)
+                #draw_label(draw, coord, str(int(result[2][2])*int(result[2][3])), group)
+                #data[part]["count"] += 1
+                #draw.rectangle(results[part]["box"], outline=(250,0,0), width=6)
+        for part in data.keys():
+            if data[part]['box'][0] != 1000:
+                draw_label(draw, [data[part]['box'][0]-10, data[part]['box'][1]-10, data[part]['box'][2]+10, data[part]['box'][3]+10], part, -1)
+
     img_draw.save(os.path.join("output", f"result-{img_indx}.jpg"), quality=100)
 
-  with open("./output/result-0.jpg", "rb") as f:
-    files_upload = { "file": f}
-    temp_response = requests.post("https://temp.sh/upload", files=files_upload)
-  print(temp_response.text)
+  temp_response_text = ""
+  if args.mail:
+    with open("./output/result-0.jpg", "rb") as f:
+      files_upload = { "file": f}
+      temp_response = requests.post("https://temp.sh/upload", files=files_upload)
+    temp_response_text = temp_response.text
+    print(temp_response_text)
+
   #excel(results)
   email = "Pipe Inventory Report:<br><br>"
   for part in sorted(list(data.keys())):
     #if part == 'ALP101616':
     #  data[part]['count'] -= 1
     email += f"{part}: {data[part]['count']}<br>"
-  email += f"<br>preview: {temp_response.text}<br>"
-  if not args.mail:
+  email += f"<br>preview: {temp_response_text}<br>"
+  if args.mail: # Only send mail if args.mail is true
     send_mail(email)
   print(email)
-  return data
+  # Create a new dictionary with only part numbers and counts
+  part_counts = {part: data[part]['count'] for part in data.keys()}
+  
+  # Write the part counts to a JSON file in the output directory
+  output_file_path = os.path.join("output", "results.json")
+  with open(output_file_path, 'w') as json_file:
+    json.dump(part_counts, json_file, indent=4)
+
+  return output_file_path
+
+def run_tests():
+    test_images_dir = "test/images"
+    true_results_dir = "test/results"
+    output_dir = "output"
+
+    # Clean up previous output directory
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    image_files = [f for f in os.listdir(test_images_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
+
+    total_pipes = 0
+    correct_classifications = 0
+
+    for image_file in image_files:
+        image_path = os.path.join(test_images_dir, image_file)
+        # Assuming the JSON file has the same name as the image file but with a .json extension
+        true_result_file = os.path.splitext(image_file)[0] + ".json"
+        true_result_path = os.path.join(true_results_dir, true_result_file)
+
+        if not os.path.exists(true_result_path):
+            print(f"Warning: True result file not found for {image_file}. Skipping.")
+            continue
+
+        # Process the image using the process function
+        try:
+            # The process function now writes to output/results.json and returns the path
+            generated_result_path = process([image_path])
+        except Exception as e:
+            print(f"Error processing {image_file}: {e}")
+            continue
+
+        # Read generated and true results
+        if not os.path.exists(generated_result_path):
+            print(f"Error: Generated result file not found for {image_file}. Skipping comparison.")
+            continue
+
+        with open(generated_result_path, 'r') as f:
+            generated_results = json.load(f)
+
+        with open(true_result_path, 'r') as f:
+            true_results = json.load(f)
+
+        # Compare results
+        # Assuming the keys (part numbers) are the same in both dictionaries
+        for part, true_count in true_results.items():
+            generated_count = generated_results.get(part, 0)
+            total_pipes += true_count
+            # For simplicity, considering a classification correct if the count for a part matches
+            # A more sophisticated comparison might be needed depending on requirements
+            if generated_count == true_count:
+                correct_classifications += true_count
+            # else:
+                # If counts don't match, we need to figure out how many were misclassified.
+                # This simple approach counts all pipes for that part as incorrect if the total count doesn't match.
+                # A more accurate method would involve comparing individual pipe classifications if available.
+                # pass # Simple count comparison is sufficient for this basic test
+
+        # Clean up the generated results.json for the current image
+        if os.path.exists(generated_result_path):
+             os.remove(generated_result_path)
+
+
+    # Calculate accuracy
+    accuracy = (correct_classifications / total_pipes) if total_pipes > 0 else 0
+
+    print(f"\nOverall Accuracy: {accuracy:.2f}")
+
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
@@ -324,6 +430,7 @@ if __name__ == '__main__':
   parser.add_argument('-d', '--device', default="cuda:0")
   parser.add_argument('-c', '--conf', type=float, default=0.5)
   parser.add_argument('-u', '--iou', type=float, default=0.5)
+  parser.add_argument('--test', action='store_true', help='Run tests on images in test/images')
   args = parser.parse_args()
 
   colors = [
@@ -338,6 +445,8 @@ if __name__ == '__main__':
   if args.serve:
     app.config["SAVE"] = args.write
     app.run(debug=False, host='0.0.0.0', port=5001)
+  elif args.test:
+      run_tests()
   elif args.imgs:
     result = process(args.imgs)
     print(result)
