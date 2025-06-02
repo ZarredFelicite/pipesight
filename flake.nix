@@ -349,7 +349,7 @@
             #python.pkgs.sentencepiece
             #python.pkgs.accelerate
             #python.pkgs.requests-toolbelt
-            #python.pkgs.python-dotenv
+            python.pkgs.python-dotenv
             #python.pkgs.openai
             #python.pkgs.shapely
             #python.pkgs.pyclipper

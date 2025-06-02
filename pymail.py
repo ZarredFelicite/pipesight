@@ -6,6 +6,9 @@ import zipfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def zip_folder(folder_path, zip_path):
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -16,14 +19,22 @@ def zip_folder(folder_path, zip_path):
                 zipf.write(file_path, arcname)
 
 def send_mail(text, folder_path=None):
+  sender_email = os.environ.get("SENDER_EMAIL")
+  recipient_email = os.environ.get("RECIPIENT_EMAIL")
+  email_password = os.environ.get("EMAIL_PASSWORD")
+
+  if not sender_email or not recipient_email or not email_password:
+      print("Error: Email credentials not set in environment variables.")
+      return # Or raise an exception
+
   if folder_path:
     zip_path = "/tmp/email.zip"
     zip_folder(folder_path, zip_path)
   message = MIMEMultipart("alternative")
   message["Subject"] = "Pipes Inventory Report"
-  message["From"] = "robotmon3@gmail.com"
-  message["To"] = "zarredf@hiltonmfg.com.au"
-  password = "roqglsvdkmdqlajc"
+  message["From"] = sender_email
+  message["To"] = recipient_email
+  password = email_password
   # Create the plain-text and HTML version of your message
   html = f"""\
   <html>
@@ -41,5 +52,5 @@ def send_mail(text, folder_path=None):
   # Send email
   with smtplib.SMTP('smtp.gmail.com', 587) as server:
       server.starttls()  # Secure the connection
-      server.login(message["From"], password)
-      server.sendmail(message["From"], message["To"], message.as_string())
+      server.login(sender_email, email_password)
+      server.sendmail(sender_email, recipient_email, message.as_string())
