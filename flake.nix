@@ -338,7 +338,7 @@
     devShells.default = pkgs.mkShell {
       name = "yolo";
       buildInputs = systemPackages ++ [
-        ( pkgs.writeScriptBin "pipes" "./pipesight.py -c 0.15 -svp" )
+        ( pkgs.writeScriptBin "pipes" "./pipesight.py -c 0.15 -svpm" )
         python
         python.pkgs.setuptools
         python.pkgs.requests
