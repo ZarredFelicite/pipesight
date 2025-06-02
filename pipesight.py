@@ -267,9 +267,7 @@ def process(files):
         # Apply size filtering and draw processed bounding boxes and labels
         for result, group_size in zip(results, groups_size):
             result = result + (convert_bbox_wh(result[2]),)
-            if abs(1 - result[2][2]/result[2][3]) < 0.05:
-                idx = bisect.bisect_left(sizes, size_groups[group_size])
-            else:
+            if abs(1 - result[2][2]/result[2][3]) < 0.05 or result[1] < 0.3:
                 closest_score = float('inf')
                 closest_group = None
                 current_area = result[2][2] * result[2][3]
@@ -293,6 +291,8 @@ def process(files):
                     # If no nearby confident pipe is found, classify as undefined or use another fallback
                     # For now, let's classify as undefined
                     idx = len(parts) # This will make it 'undefined' based on the data dictionary structure
+            else:
+                idx = bisect.bisect_left(sizes, size_groups[group_size])
 
             if idx < len(parts):
                 data[parts[idx][0]]['count'] += 1
