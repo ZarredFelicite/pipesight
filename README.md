@@ -1,6 +1,7 @@
 # Pipesight
 
 Pipesight is a Python script that uses an ONNX model to detect pipes in images, analyze their sizes, and generate inventory reports. It can also send email notifications with the report and a preview image.
+![pipes_detection](https://github.com/user-attachments/assets/e9d6010b-0a1b-4803-a4ab-1472559cf83f)
 
 ## Setup
 
