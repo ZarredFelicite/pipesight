@@ -259,12 +259,15 @@ def process(files):
 
     if args.save_raw:
         # Draw all bounding boxes after NMS but before size filtering
+        final_confidence_scores = []
         for result in results:
             xywh = result[2]
             coord = convert_bbox_wh(xywh)
             draw.rectangle(coord, outline=(0, 255, 0), width=1) # Draw in green for raw
+            final_confidence_scores.append(result[1])  # Collect confidence score
     else:
         # Apply size filtering and draw processed bounding boxes and labels
+        final_confidence_scores = []
         for result, group_size in zip(results, groups_size):
             result = result + (convert_bbox_wh(result[2]),)
             if abs(1 - result[2][2]/result[2][3]) > 0.05 or result[1] < 0.3:
@@ -314,9 +317,38 @@ def process(files):
                 #draw_label(draw, coord, str(int(result[2][2])*int(result[2][3])), group)
                 #data[part]["count"] += 1
                 #draw.rectangle(results[part]["box"], outline=(250,0,0), width=6)
+                final_confidence_scores.append(result[1])  # Collect confidence score
         for part in data.keys():
             if data[part]['box'][0] != 1000:
                 draw_label(draw, [data[part]['box'][0]-10, data[part]['box'][1]-10, data[part]['box'][2]+10, data[part]['box'][3]+10], part, -1)
+
+    # Calculate and display average confidence score
+    if final_confidence_scores:
+        avg_confidence = sum(final_confidence_scores) / len(final_confidence_scores)
+        confidence_text = f"Avg Confidence: {avg_confidence:.3f}"
+        
+        # Create a background rectangle for the text
+        text_bbox = draw.textbbox((10, 10), confidence_text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        
+        # Draw background rectangle
+        draw.rectangle([(5, 5), (15 + text_width, 15 + text_height)], fill=(0, 0, 0, 128))
+        
+        # Draw the text
+        draw.text((10, 10), confidence_text, fill=(255, 255, 255), font=font)
+    else:
+        # No detections found
+        no_detection_text = "No detections found"
+        text_bbox = draw.textbbox((10, 10), no_detection_text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        
+        # Draw background rectangle
+        draw.rectangle([(5, 5), (15 + text_width, 15 + text_height)], fill=(0, 0, 0, 128))
+        
+        # Draw the text
+        draw.text((10, 10), no_detection_text, fill=(255, 255, 255), font=font)
 
     img_draw.save(os.path.join("output", f"result-{img_indx}.jpg"), quality=100)
 
