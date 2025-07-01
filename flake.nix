@@ -364,6 +364,7 @@
         python.pkgs.symspellpy
         python.pkgs.pytesseract
         python.pkgs.scikit-learn
+        (python.pkgs.hdbscan.overridePythonAttrs { doCheck = false; })
             #onnxslim-python
             #python.pkgs.torch
             #python.pkgs.torchvision

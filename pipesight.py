@@ -8,7 +8,7 @@ import cv2
 #import csv
 import statistics
 import numpy as np
-from sklearn.cluster import DBSCAN
+import hdbscan  # switched from DBSCAN to HDBSCAN for better hierarchical clustering
 import argparse
 #import xlsxwriter
 from pymail import send_mail
@@ -236,24 +236,39 @@ def process(files):
     start = time.time()
 
     #radii = [[hough_circle(img, detection)] for detection in results]
-    dbscan_size = DBSCAN(eps=2, min_samples=1)
-    #dbscan_rad = DBSCAN(eps=1, min_samples=1)
-    #features = [[(int(detection[2][2])), int(detection[2][0]), int(detection[2][1])*2] for detection in results]
-    sizes = [int(detection[2][2]) for detection in results]
-    #groups_pos = [int(x) for x in dbscan_pos.fit_predict(np.array([[int(detection[2][0]),int(detection[2][1]/3)] for detection in results]))]
-    groups_size = [int(x) for x in dbscan_size.fit_predict(np.array([(x,) for x in sizes]))]
-    size_groups = [statistics.median([sizes[i] for i in [i for i,x in enumerate(groups_size) if x == group]]) for group in range(max(groups_size)+1)]
-    if args.verbose:
-      print(size_groups)
-      for a,b in zip(sizes, groups_size):
-        pprint((a,b))
-    #order = [sorted(group_samples).index(num) for num in group_samples]
+    # ------------------------------------------------------------
+    # CLUSTER DETECTIONS WITH HDBSCAN
+    # ------------------------------------------------------------
+    # Build feature vector:  [bbox_width , bbox_height * h_weight , y_position * y_weight]
+    # Width remains the dominant factor; height and y-position are given smaller weights.
+    pipe_widths = [int(det[2][2]) for det in results]
+    pipe_heights = [int(det[2][3]) for det in results]
+    y_weight = 0.3  # weight for y-coordinate influence (moderate)
+    x_weight = 0.05 # weight for x-coordinate influence (smaller than y)
+    h_weight = 0.8  # weight for height influence (smaller than width)
+    features = np.array([[pipe_widths[i],
+                         pipe_heights[i] * h_weight,
+                         int(det[2][1]) * y_weight,
+                         int(det[2][0]) * x_weight]
+                        for i, det in enumerate(results)], dtype=float)
+
+    # Perform clustering – HDBSCAN will return -1 for noise points
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=2, min_samples=1, metric='euclidean')
+    groups_size = clusterer.fit_predict(features)
+
+    # Median width of each cluster → maps cluster label → canonical width
+    cluster_medians = {}
+    for idx_det, label in enumerate(groups_size):
+        cluster_medians.setdefault(label, []).append(pipe_widths[idx_det])
+    for label in cluster_medians:
+        cluster_medians[label] = statistics.median(cluster_medians[label])
+
     if args.profile:
-      print('DBSCAN time: ' + str(np.round((time.time() - start) * 1000, 2)) + " ms")
+      print('HDBSCAN time: ' + str(np.round((time.time() - start) * 1000, 2)) + " ms")
     with open('sizes.txt', 'r') as f:
       parts = f.readlines()
     parts = [ part.replace('\n','').split(',') for part in parts ]
-    sizes = [float(part[1]) for part in parts]
+    catalog_sizes = [float(part[1]) for part in parts]
     data = { part : { 'count': int(offset), 'box': [1000,1000,0,0], 'size': float(size) } for part, size, offset in parts }
     data['undefined'] = {'count': 0, 'box': [1000,1000,0,0], 'size': 0}
 
@@ -268,7 +283,7 @@ def process(files):
     else:
         # Apply size filtering and draw processed bounding boxes and labels
         final_confidence_scores = []
-        for result, group_size in zip(results, groups_size):
+        for det_idx, (result, group_size) in enumerate(zip(results, groups_size)):
             result = result + (convert_bbox_wh(result[2]),)
             if abs(1 - result[2][2]/result[2][3]) > 0.05 or result[1] < 0.3:
                 closest_score = float('inf')
@@ -288,14 +303,14 @@ def process(files):
                             closest_score = combined_score
                             closest_group = close_group_size
 
-                if closest_group is not None:
-                    idx = bisect.bisect_left(sizes, size_groups[closest_group])
+                if closest_group is not None and closest_group in cluster_medians:
+                    idx = bisect.bisect_left(catalog_sizes, cluster_medians[closest_group])
                 else:
                     # If no nearby confident pipe is found, classify as undefined or use another fallback
                     # For now, let's classify as undefined
                     idx = len(parts) # This will make it 'undefined' based on the data dictionary structure
             else:
-                idx = bisect.bisect_left(sizes, size_groups[group_size])
+                idx = bisect.bisect_left(catalog_sizes, cluster_medians.get(group_size, pipe_widths[det_idx]))
 
             if idx < len(parts):
                 data[parts[idx][0]]['count'] += 1
