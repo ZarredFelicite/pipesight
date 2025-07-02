@@ -18,7 +18,17 @@ import onnxruntime
 import bisect
 from pprint import pprint
 import requests
+from requests import Response
 import json
+
+# ------------------------------------------------------------
+# Conditional verbose logger (available early in module)
+# ------------------------------------------------------------
+
+def vprint(*_args, **_kwargs):
+    """Print only when -v/--verbose flag is supplied."""
+    if globals().get("args", None) is not None and getattr(args, "verbose", False):
+        print(*_args, **_kwargs)
 
 def draw_label(draw, box, text, color):
   size = font.getlength(text)
@@ -225,6 +235,7 @@ def process(files):
       print('Inference time: ' + str(np.round((time.time() - start) * 1000, 2)) + " ms")
     start = time.time()
     results = postprocess(raw_result, args.conf, args.iou)
+    vprint(f"Detections after NMS: {len(results)} | confidences: {[round(r[1], 2) for r in results]}")
     if args.profile:
       print('NMS time: ' + str(np.round((time.time() - start) * 1000, 2)) + " ms")
     # data drift detection
@@ -243,10 +254,11 @@ def process(files):
     # Width remains the dominant factor; height and y-position are given smaller weights.
     pipe_widths = [int(det[2][2]) for det in results]
     pipe_heights = [int(det[2][3]) for det in results]
-    y_weight = 0.3  # weight for y-coordinate influence (moderate)
-    x_weight = 0.05 # weight for x-coordinate influence (smaller than y)
-    h_weight = 0.8  # weight for height influence (smaller than width)
-    features = np.array([[pipe_widths[i],
+    y_weight = 0.1  # weight for y-coordinate influence (moderate)
+    x_weight = 0 # weight for x-coordinate influence (smaller than y)
+    h_weight = 1  # weight for height influence (smaller than width)
+    w_weight = 1  # weight for height influence (smaller than width)
+    features = np.array([[pipe_widths[i] * w_weight,
                          pipe_heights[i] * h_weight,
                          int(det[2][1]) * y_weight,
                          int(det[2][0]) * x_weight]
@@ -255,13 +267,19 @@ def process(files):
     # Perform clustering – HDBSCAN will return -1 for noise points
     clusterer = hdbscan.HDBSCAN(min_cluster_size=2, min_samples=1, metric='euclidean')
     groups_size = clusterer.fit_predict(features)
+    unique_labels, counts_labels = np.unique(groups_size, return_counts=True)
+    vprint("HDBSCAN label distribution:", dict(zip(unique_labels.tolist(), counts_labels.tolist())))
 
     # Median width of each cluster → maps cluster label → canonical width
     cluster_medians = {}
     for idx_det, label in enumerate(groups_size):
+        # Ignore noise points (label == -1) when computing cluster medians
+        if label == -1:
+            continue
         cluster_medians.setdefault(label, []).append(pipe_widths[idx_det])
     for label in cluster_medians:
         cluster_medians[label] = statistics.median(cluster_medians[label])
+    vprint("Cluster median widths:", cluster_medians)
 
     if args.profile:
       print('HDBSCAN time: ' + str(np.round((time.time() - start) * 1000, 2)) + " ms")
@@ -285,7 +303,16 @@ def process(files):
         final_confidence_scores = []
         for det_idx, (result, group_size) in enumerate(zip(results, groups_size)):
             result = result + (convert_bbox_wh(result[2]),)
-            if abs(1 - result[2][2]/result[2][3]) > 0.05 or result[1] < 0.3:
+
+            # ------------------------------------------------------------
+            # SHORT-CIRCUIT: noise detections remain undefined
+            # ------------------------------------------------------------
+            if group_size == -1:
+                idx = len(parts)  # maps to 'undefined'
+            # ------------------------------------------------------------
+            # Low-quality / aspect-ratio fallback path
+            # ------------------------------------------------------------
+            elif abs(1 - result[2][2]/result[2][3]) > 0.05 or result[1] < 0.3:
                 closest_score = float('inf')
                 closest_group = None
                 current_area = result[2][2] * result[2][3]
@@ -306,22 +333,29 @@ def process(files):
                 if closest_group is not None and closest_group in cluster_medians:
                     idx = bisect.bisect_left(catalog_sizes, cluster_medians[closest_group])
                 else:
-                    # If no nearby confident pipe is found, classify as undefined or use another fallback
-                    # For now, let's classify as undefined
-                    idx = len(parts) # This will make it 'undefined' based on the data dictionary structure
+                    # Fallback to undefined
+                    idx = len(parts)  # undefined
             else:
+                # Confident detection inside a valid cluster
                 idx = bisect.bisect_left(catalog_sizes, cluster_medians.get(group_size, pipe_widths[det_idx]))
 
-            if idx < len(parts):
-                data[parts[idx][0]]['count'] += 1
-                if result[3][0] < data[parts[idx][0]]['box'][0]:
-                    data[parts[idx][0]]['box'][0] = int(result[3][0])
-                if result[3][1] < data[parts[idx][0]]['box'][1]:
-                    data[parts[idx][0]]['box'][1] = int(result[3][1])
-                if result[3][2] > data[parts[idx][0]]['box'][2]:
-                    data[parts[idx][0]]['box'][2] = int(result[3][2])
-                if result[3][3] > data[parts[idx][0]]['box'][3]:
-                    data[parts[idx][0]]['box'][3] = int(result[3][3])
+            # ------------------------------------------------------------
+            # Update inventory counts (including undefined)
+            # ------------------------------------------------------------
+            part_key = parts[idx][0] if idx < len(parts) else 'undefined'
+            data[part_key]['count'] += 1
+
+            if part_key != 'undefined':
+                # Update bounding box for visualisation
+                if result[3][0] < data[part_key]['box'][0]:
+                    data[part_key]['box'][0] = int(result[3][0])
+                if result[3][1] < data[part_key]['box'][1]:
+                    data[part_key]['box'][1] = int(result[3][1])
+                if result[3][2] > data[part_key]['box'][2]:
+                    data[part_key]['box'][2] = int(result[3][2])
+                if result[3][3] > data[part_key]['box'][3]:
+                    data[part_key]['box'][3] = int(result[3][3])
+
                 xywh = result[2]
                 coord = convert_bbox_wh(xywh)
                 #if center_contains(xy, results[part]["box"]):
@@ -392,6 +426,24 @@ def process(files):
   output_file_path = os.path.join("output", "results.json")
   with open(output_file_path, 'w') as json_file:
     json.dump(part_counts, json_file, indent=4)
+
+  # ------------------------------------------------------------
+  # Optional: visualize clusters only
+  # ------------------------------------------------------------
+  if args.clusters:
+      img_clusters = img.copy()
+      draw_clusters = ImageDraw.Draw(img_clusters)
+      for det_idx, (result, cluster_label) in enumerate(zip(results, groups_size)):
+          coord = convert_bbox_wh(result[2])
+          # White for noise, otherwise cycle through predefined colors
+          outline_col = (255, 255, 255) if cluster_label == -1 else colors[cluster_label % len(colors)]
+          draw_clusters.rectangle(coord, outline=outline_col, width=3)
+          if args.verbose:
+              # Label with cluster id for easier debugging
+              draw_label(draw_clusters, coord, str(cluster_label), cluster_label % len(colors) if cluster_label != -1 else 0)
+      clusters_path = os.path.join("output", f"clusters-{img_indx}.jpg")
+      img_clusters.save(clusters_path, quality=100)
+      vprint(f"Clusters image saved to {clusters_path}")
 
   return output_file_path
 
@@ -478,6 +530,7 @@ if __name__ == '__main__':
   parser.add_argument('-c', '--conf', type=float, default=0.5)
   parser.add_argument('-u', '--iou', type=float, default=0.5)
   parser.add_argument('--test', action='store_true', help='Run tests on images in test/images')
+  parser.add_argument('--clusters', action='store_true', help='Save an additional image showing only HDBSCAN clusters')
   args = parser.parse_args()
 
   colors = [
