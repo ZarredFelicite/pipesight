@@ -228,6 +228,16 @@ def process(files):
     img_input, img = preprocess(img)
     img_draw = img.copy()
     draw = ImageDraw.Draw(img_draw)
+
+    # ------------------------------------------------------------
+    # Initialise placeholders for double-check overlay
+    # ------------------------------------------------------------
+    img_double = None
+    draw_double = None
+    if args.double_check:
+        img_double = img.copy()
+        draw_double = ImageDraw.Draw(img_double)
+
     start = time.time()
     raw_result = session.run([], {input_name: img_input})
     #draw = hough_circles(draw, img_draw)
@@ -367,6 +377,16 @@ def process(files):
                 #data[part]["count"] += 1
                 #draw.rectangle(results[part]["box"], outline=(250,0,0), width=6)
                 final_confidence_scores.append(result[1])  # Collect confidence score
+
+            # ------------------------------------------------------------
+            # Double-check: draw colored dot at detection center
+            # ------------------------------------------------------------
+            if args.double_check and draw_double is not None and part_key != 'undefined':
+                cx, cy = int(result[2][0]), int(result[2][1])  # detection center
+                dot_radius = 5  # 10-pixel diameter
+                dot_color = colors[idx % len(colors)]
+                draw_double.ellipse([(cx - dot_radius, cy - dot_radius), (cx + dot_radius, cy + dot_radius)], fill=dot_color)
+
         for part in data.keys():
             if data[part]['box'][0] != 1000:
                 draw_label(draw, [data[part]['box'][0]-10, data[part]['box'][1]-10, data[part]['box'][2]+10, data[part]['box'][3]+10], part, -1)
@@ -444,6 +464,14 @@ def process(files):
       clusters_path = os.path.join("output", f"clusters-{img_indx}.jpg")
       img_clusters.save(clusters_path, quality=100)
       vprint(f"Clusters image saved to {clusters_path}")
+
+  # ------------------------------------------------------------
+  # Save double-check overlay
+  # ------------------------------------------------------------
+  if args.double_check and img_double is not None:
+      double_path = os.path.join("output", f"doublecheck-{img_indx}.jpg")
+      img_double.save(double_path, quality=100)
+      vprint(f"Double-check image saved to {double_path}")
 
   return output_file_path
 
@@ -531,6 +559,7 @@ if __name__ == '__main__':
   parser.add_argument('-u', '--iou', type=float, default=0.5)
   parser.add_argument('--test', action='store_true', help='Run tests on images in test/images')
   parser.add_argument('--clusters', action='store_true', help='Save an additional image showing only HDBSCAN clusters')
+  parser.add_argument('--double-check', action='store_true', help='Save an image with colored dots at detection centers according to final grouping')
   args = parser.parse_args()
 
   colors = [
