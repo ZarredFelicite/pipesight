@@ -302,15 +302,15 @@ def process(files):
 
     if args.save_raw:
         # Draw all bounding boxes after NMS but before size filtering
-        final_confidence_scores = []
-        for result in results:
+        accuracy_scores = []
+        for i, result in enumerate(results):
             xywh = result[2]
             coord = convert_bbox_wh(xywh)
             draw.rectangle(coord, outline=(0, 255, 0), width=1) # Draw in green for raw
-            final_confidence_scores.append(result[1])  # Collect confidence score
+            accuracy_scores.append(result[1] * clusterer.probabilities_[i])
     else:
         # Apply size filtering and draw processed bounding boxes and labels
-        final_confidence_scores = []
+        accuracy_scores = []
         for det_idx, (result, group_size) in enumerate(zip(results, groups_size)):
             result = result + (convert_bbox_wh(result[2]),)
 
@@ -376,7 +376,7 @@ def process(files):
                 #draw_label(draw, coord, str(int(result[2][2])*int(result[2][3])), group)
                 #data[part]["count"] += 1
                 #draw.rectangle(results[part]["box"], outline=(250,0,0), width=6)
-                final_confidence_scores.append(result[1])  # Collect confidence score
+                accuracy_scores.append(result[1] * clusterer.probabilities_[det_idx])
 
             # ------------------------------------------------------------
             # Double-check: draw colored dot at detection center
@@ -391,10 +391,10 @@ def process(files):
             if data[part]['box'][0] != 1000:
                 draw_label(draw, [data[part]['box'][0]-10, data[part]['box'][1]-10, data[part]['box'][2]+10, data[part]['box'][3]+10], part, -1)
 
-    # Calculate and display average confidence score
-    if final_confidence_scores:
-        avg_confidence = sum(final_confidence_scores) / len(final_confidence_scores)
-        confidence_text = f"Avg Confidence: {avg_confidence:.3f}"
+    # Calculate and display accuracy score
+    if accuracy_scores:
+        accuracy_score = sum(accuracy_scores)
+        confidence_text = f"Accuracy Score: {accuracy_score:.3f}"
         
         # Create a background rectangle for the text
         text_bbox = draw.textbbox((10, 10), confidence_text, font=font)
